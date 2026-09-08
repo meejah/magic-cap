@@ -97,6 +97,7 @@
 //!
 
 use tracing::debug;
+use std::env;
 
 use magic_cap::err::MagicCapError;
 /// Functions that implement the core CLI commands
@@ -112,10 +113,54 @@ use std::io::BufWriter;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use url::Url;
+use tokio;
 
 use walkdir::WalkDir;
 
 pub mod tests;
+
+
+pub async fn _github_push(catalog: &PathBuf, readcap: &ImmutableReadCap) -> Result<(), MagicCapError> {
+    println!("_github_push");
+    let client = reqwest::Client::new();
+
+    // we need to
+    // 1. create an identifier for this readcap
+    // 2. upload the mcap data as a blob
+    // 3. read the existing tree at "main"
+    // 4. add ourselves as a leaf: locator -> blob
+    // 5. update the tree? (or can we just "add a thing to root"?)
+
+    let token = env::var("GITHUB_AUTH").unwrap();
+    let request = client.request(reqwest::Method::GET, "https://api.github.com/repos/meejah/magic-cap-storage/git/blobs/eccd757bd6c003c846ccf4cbdc20ebcea5f23cb9")
+        .bearer_auth(token)
+        .header("Accept", "application/vnd.github.raw+json")
+        .header("User-Agent", "reqwest")
+        .header("X-GitHub-Api-Version", "2026-03-10")
+        ;
+
+    let result = client.execute(request.build()?).await?;
+    println!("result {result:?}");
+
+    // can "result.chunk()" to get some amount of body
+    let text = result.bytes().await;
+    println!("text {text:?}");
+
+    Ok(())
+}
+
+pub fn main_github_push(catalog: &PathBuf, readcap: &ImmutableReadCap) -> Result<(), MagicCapError> {
+
+    // note: integrate with "top-level is async" stuff, but for now we just run Tokio in here
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(
+            _github_push(catalog, readcap)
+        )
+}
 
 /// Implementation of "mcap encrypt"
 /// This is the top level function for easy use of this crate by applications or other libraries.

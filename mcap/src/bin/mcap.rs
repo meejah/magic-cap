@@ -1,7 +1,7 @@
 use magic_cap::ImmutableReadCap;
 use magic_cap_cli::{
     main_anthology_create, main_anthology_list, main_debug_info, main_debug_locator, main_decrypt,
-    main_encrypt, main_publish, main_reduce, main_verify,
+    main_encrypt, main_publish, main_reduce, main_verify, main_github_push,
 };
 use tracing_subscriber::FmtSubscriber;
 
@@ -78,6 +78,16 @@ enum AnthologyCommands {
 
 #[derive(Subcommand)]
 #[command(arg_required_else_help(true))]
+enum GitHubCommands {
+    #[command(about = "push a thing from a local Catalog to GitHub")]
+    Push {
+        catalog: PathBuf,
+        readcap: ImmutableReadCap,
+    }
+}
+
+#[derive(Subcommand)]
+#[command(arg_required_else_help(true))]
 enum Commands {
     #[command(about = "turn plaintext into a Read Cap + ciphertext")]
     Encrypt {
@@ -145,6 +155,12 @@ enum Commands {
         #[command(subcommand)]
         command: Option<AnthologyCommands>,
     },
+
+    #[command(about = "Write encrypted data to GitHub")]
+    GitHub {
+        #[command(subcommand)]
+        command: Option<GitHubCommands>,
+    }
 }
 
 /// When decrypting ciphertext, where is that ciphertext?
@@ -249,6 +265,10 @@ fn main() {
             Some(AnthologyCommands::List { readcap }) => main_anthology_list(readcap),
             None => Ok(()),
         },
+        Some(Commands::GitHub { command }) => match command {
+            Some(GitHubCommands::Push { catalog, readcap}) => main_github_push(catalog, readcap),
+            None => Ok(()),
+        }
         None => Ok(()),
     };
     if let Err(e) = result {
