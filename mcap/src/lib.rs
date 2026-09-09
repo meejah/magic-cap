@@ -98,6 +98,7 @@
 
 use tracing::debug;
 use std::env;
+use base64::prelude::*;
 
 use magic_cap::err::MagicCapError;
 /// Functions that implement the core CLI commands
@@ -123,28 +124,119 @@ pub mod tests;
 pub async fn _github_push(catalog: &PathBuf, readcap: &ImmutableReadCap) -> Result<(), MagicCapError> {
     println!("_github_push");
     let client = reqwest::Client::new();
+    let catalog_path = catalog.clone();
+    let catalog = magic_cap::ImmutableDirectoryCatalog::create(catalog_path)?;
 
     // we need to
     // 1. create an identifier for this readcap
     // 2. upload the mcap data as a blob
-    // 3. read the existing tree at "main"
-    // 4. add ourselves as a leaf: locator -> blob
-    // 5. update the tree? (or can we just "add a thing to root"?)
+    // 3. find out the tree at "main"
+    // 4. edit the tree at "main" to include: locator -> blob
+    //    https://docs.github.com/en/rest/git/trees?apiVersion=2026-03-10#create-a-tree
+    // 5. commit the tree
+    // 6. update "main" to point at tree
 
     let token = env::var("GITHUB_AUTH").unwrap();
-    let request = client.request(reqwest::Method::GET, "https://api.github.com/repos/meejah/magic-cap-storage/git/blobs/eccd757bd6c003c846ccf4cbdc20ebcea5f23cb9")
-        .bearer_auth(token)
-        .header("Accept", "application/vnd.github.raw+json")
+
+    let locator: ImmutableIdentifier = readcap.try_into().unwrap();
+    println!("locator: {}", locator);
+
+    // we could use "catalog.stream" but the only way to submit to
+    // github is inside JSON, which needs to be base64-encoded .. yuck
+    // .. but also CAN we coerce serde into incrementally producing
+    // the JSON for that??
+    let mut local_data = catalog.load(&locator)?;
+    let data = readcap.decrypt(&mut local_data)?;
+    let b64 = BASE64_STANDARD.encode(data);
+
+    // create blob for our mcap data
+    let body = "{\"encoding\": \"base64\", \"content\": \"".to_owned() + &b64 + "\"}";
+    let request = client.request(reqwest::Method::POST, "https://api.github.com/repos/meejah/magic-cap-storage/git/blobs")
+        .bearer_auth(&token)
+        .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "reqwest")
         .header("X-GitHub-Api-Version", "2026-03-10")
+        .body(body)
         ;
-
     let result = client.execute(request.build()?).await?;
-    println!("result {result:?}");
+    let text = result.text().await?;
+    let js: serde_json::Value = serde_json::from_str(&text).unwrap();
+    if let Some(blob_sha) = js["sha"].as_str() {
+        println!("new blob sha {blob_sha}");
 
-    // can "result.chunk()" to get some amount of body
-    let text = result.bytes().await;
-    println!("text {text:?}");
+        let request = client.request(reqwest::Method::GET, "https://api.github.com/repos/meejah/magic-cap-storage/git/ref/heads/main")
+            .bearer_auth(&token)
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "reqwest")
+            .header("X-GitHub-Api-Version", "2026-03-10")
+            ;
+
+        let result = client.execute(request.build()?).await?;
+
+        // can "result.chunk()" to get some amount of body
+        let text = result.text().await?;
+        let js: serde_json::Value = serde_json::from_str(&text).unwrap();
+        if let Some(main_sha) = js["object"]["sha"].as_str() {
+            println!("main tree {:?}", main_sha);
+
+            let locator_str: String = locator.to_string();
+            let body = "{\"base_tree\": \"".to_owned() + &main_sha + "\", \"tree\": [{\"path\": \"" + &locator_str + "\", \"mode\": \"100644\", \"type\": \"blob\", \"sha\": \"" + &blob_sha + "\"}]}";
+            let tree_uri = format!("https://api.github.com/repos/meejah/magic-cap-storage/git/trees");
+            let request = client.request(reqwest::Method::POST, tree_uri)
+                .bearer_auth(&token)
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "reqwest")
+                .header("X-GitHub-Api-Version", "2026-03-10")
+                .body(body)
+                ;
+
+            let result = client.execute(request.build()?).await?;
+
+            // can "result.chunk()" to get some amount of body
+            let text = result.text().await?;
+            let js: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if let Some(tree_sha) = js["sha"].as_str() {
+                println!("edited tree to {tree_sha:?}");
+
+                let body = "{\"message\": \"magic-cap automated update\", \"author\": {\"name\": \"meejah\", \"email\": \"meejah@meejah.ca\", \"date\": \"2026-01-01T00:00:00+00:00\"}, \"parents\": [\"".to_owned() + main_sha + "\"], \"tree\": \"" + tree_sha + "\"}";
+                let tree_uri = format!("https://api.github.com/repos/meejah/magic-cap-storage/git/commits");
+                let request = client.request(reqwest::Method::POST, tree_uri)
+                    .bearer_auth(&token)
+                    .header("Accept", "application/vnd.github+json")
+                    .header("User-Agent", "reqwest")
+                    .header("X-GitHub-Api-Version", "2026-03-10")
+                    .body(body)
+                    ;
+
+                let result = client.execute(request.build()?).await?;
+
+                // can "result.chunk()" to get some amount of body
+                let text = result.text().await?;
+                let js: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+                if let Some(commit_sha) = js["sha"].as_str() {
+                    println!("made commit: {commit_sha}");
+
+                    let body = "{\"sha\": \"".to_owned() + &commit_sha + "\", \"force\": true}";
+                    let tree_uri = format!("https://api.github.com/repos/meejah/magic-cap-storage/git/refs/heads/main");
+                    let request = client.request(reqwest::Method::POST, tree_uri)
+                        .bearer_auth(&token)
+                        .header("Accept", "application/vnd.github+json")
+                        .header("User-Agent", "reqwest")
+                        .header("X-GitHub-Api-Version", "2026-03-10")
+                        .body(body)
+                        ;
+
+                    let result = client.execute(request.build()?).await?;
+
+                    // can "result.chunk()" to get some amount of body
+                    let text = result.text().await?;
+                    let js: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    println!("moved main {js:?}");
+                }
+            }
+        }
+    }
 
     Ok(())
 }

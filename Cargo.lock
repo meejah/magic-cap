@@ -1144,6 +1144,7 @@ dependencies = [
 name = "magic_cap_cli"
 version = "0.2.0"
 dependencies = [
+ "base64",
  "bytes",
  "clap",
  "magic_cap",
