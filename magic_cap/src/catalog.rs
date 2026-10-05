@@ -14,55 +14,6 @@ use url::Url;
 
 use tracing::debug;
 
-/// synchronous usage of a Catalog
-pub trait Catalog<'a> {
-    fn load(&self, locator: &ImmutableIdentifier) -> Result<Immutable<'a>, MagicCapError>;
-
-    fn stream(&self, locator: &ImmutableIdentifier) -> Result<Immutable<'a>, MagicCapError>;
-
-    // todo: should this be in a WritableCatalog sub-trait?
-    fn insert(
-        &mut self,
-        blocksize: usize,
-    ) -> Result<ImmutableBuilder<BufWriter<File>>, MagicCapError>;
-}
-
-// trait doesn't / shouldn't need to be gated on the feature .. right?
-// #[cfg(feature = "async_web")]
-/// communcate asynchronously with a Catalog
-pub trait AsyncCatalog<'a> {
-
-    // note that the "impl Future" style instead of "async fn" is
-    // suggested by the compiler to suppress a lint / warning about not being able to have auto trait bounds.
-    // do we "care about auto traits like `Send` on the `Future`"..?
-
-    fn fetch_metadata(&self, locator: &ImmutableIdentifier) -> impl Future<Output = Result<ImmutableMetadata, MagicCapError>>;
-
-    fn copy_ciphertext_to(&self, locator: &ImmutableIdentifier, dest: &mut dyn Write) -> impl Future<Output = Result<(), MagicCapError>>;
-
-    // TODO: hrmmm maybe we _don't_ want this in the trait .. doesn't below here nor in synchronous one, really
-    // .. but is only used in the async web stuff in mcap bin .. right before copy_ciphertext_to() so can we combine?
-    fn stream_decrypt<'b, W: Write>(
-        &self,
-        locator: &ImmutableIdentifier,
-        key: TahoeAesCtr,
-        plaintext_output: &'b mut W,
-    ) -> impl Future<Output = Result<(), MagicCapError>>;
-/*        key: TahoeAesCtr,
-        metadata: ImmutableMetadata,
-        plaintext_output: &'b mut W,
-    ) -> impl Future<Output = Result<ImmutableDecryptor<'b, W>, MagicCapError>>;*/
-
-// do we want a like AsyncWritableCatalog or similar? same for sync one??!
-
-/*
-    async fn insert_async(
-        &mut self,
-        blocksize: usize,
-    ) -> Result<ImmutableBuilder<BufWriter<File>>, MagicCapError>;
-*/
-}
-
 
 // todo: might want a more fine-grained API so we do "get_metadata"
 // vs. "get_ciphertext" so that a network / storage-server can be
