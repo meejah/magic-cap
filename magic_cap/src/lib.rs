@@ -139,13 +139,21 @@ pub trait ImmutableVerifier {
     fn verify(&self, immutable: &mut Immutable) -> Result<(), MagicCapError>;
 }
 
+/// This is the Write-implementing object you receive from
+/// ImmutableReadCap::decrypt_stream (for example) which tracks the
+/// state of the decryption and feeds plaintext bytes out.
+///
+/// It is used by simply writing the corresponding ciphertext into
+/// this object via the `Write` trait. This can be useful when you are
+/// "driving" the decryption or I/O (e.g. receiving bytes over the
+/// network or similar).
 pub struct ImmutableDecryptor<'a, W>
 where
     W: Write,
 {
     plain_output: &'a mut W,
     metadata: ImmutableMetadata,
-    key: TahoeAesCtr,
+    key: TahoeAesCtr,  // contains key state, thus consumed
     this_block: Vec<u8>,
     this_block_num: usize,
     //plaintext_bytes: usize,
@@ -155,7 +163,8 @@ impl<'a, W> ImmutableDecryptor<'a, W>
 where
     W: Write,
 {
-    pub fn new(
+    // private constructor: the only way to make these is calls like ReadCap::decrypt_stream()
+    fn new(
         key: TahoeAesCtr,
         metadata: ImmutableMetadata,
         plain_output: &'a mut W,
@@ -176,7 +185,7 @@ where
 // "ImmutableCryptor" and use the same code for both encryption and
 // decryption...
 // ...but what happens to the merkle tree is 'backwards': when
-// encrypting, we create the tree but when decryption we need to check
+// encrypting, we create the tree but when decrypting we need to check
 // each leaf against its hash
 impl<'a, W> Write for ImmutableDecryptor<'a, W>
 where
@@ -411,7 +420,7 @@ pub fn derive_key(key_bytes: &[u8; 16], purpose: &str) -> TahoeAesCtr {
 
 type BuilderDoneCb = Box<dyn FnOnce(&ImmutableReadCap)>;
 
-/// Manage context to incrementally encrypt to an underlying [`Write`]
+/// Incrementally encrypt to an underlying [`Write`] object
 ///
 /// Instances of this are used to build up an [`Immutable`] by writing
 /// plaintext data to it, which is then encrypted and written out to
@@ -420,6 +429,14 @@ type BuilderDoneCb = Box<dyn FnOnce(&ImmutableReadCap)>;
 /// To retrieve the ``Immutable`` you must call ``done`` which
 /// consumes the ``ImmutableBuilder`` and finalizes the metadata and
 /// offsets in the output.
+///
+/// The `output` Write instance is consumed upon `::new()` and
+/// "un-consumed" upon `::done()` avoiding a lifetime for a reference
+/// and ideally making it more clear this [`Write`] instance is "ours"
+/// for the duration of the encryption.
+///
+/// Note that we do NOT need a [`Seek`] implementation here due to the
+/// file layout but in exchanged [`Seek`] is required when reading.
 pub struct ImmutableBuilder<W>
 where
     W: Write,
@@ -431,19 +448,11 @@ where
     completed: Option<BuilderDoneCb>,
 }
 
-// feb 3: see the history: we have a version that takes a "&mut Write"
-// reference, with a lifetime. It also works where we "consume" the
-// Write on ::new(), and "un-consume" it when we're "done()" (like
-// below). This gets rid of a lifetime, but we don't know which way is
-// "idiomatic Rust".
 
 impl<W> ImmutableBuilder<W>
 where
     W: Write,
 {
-    // pub fn encrypt_stream(blocksize: usize, encrypted: Write) -> Result<ImmutableBuilder, MagicCapError> {
-    // 1. write header to "encrypted"
-
     /// Create a new ``ImmutableBuilder`` which will write ciphertext
     /// to ``writer`` in chunks of size ``blocksize``.
     pub fn new(
@@ -451,8 +460,8 @@ where
         mut writer: W,
         completed: Option<BuilderDoneCb>,
     ) -> Result<Self, MagicCapError> {
-        writer.write_all(b"mcap")?; // tag
-        writer.write_all(&1u32.to_be_bytes())?; // version == 1
+        writer.write_all(b"mcap")?; // 4 tag bytes at beginnging
+        writer.write_all(&1u32.to_be_bytes())?; // 4-byte version == 0x0001
 
         let result = Self {
             context: EncryptionContext::new(blocksize)?,
@@ -464,10 +473,12 @@ where
         Ok(result)
     }
 
-    /// Finalize the metadata and return the resulting ``ImmutableReadCap``.
+    /// Finalize the metadata and return the resulting [`ImmutableReadCap`].
     ///
-    /// No more data may be written after this (as the instance is
-    /// consumed).
+    /// No more data may be written after this (as this instance is
+    /// consumed). Note that you receive the `output` [`Write`]
+    /// instance back in case you have more to do; most use-cases
+    /// should just close it (e.g. if it's a file).
     pub fn done(mut self) -> Result<(ImmutableReadCap, W), MagicCapError> {
         // 1. if remaining buffered data, pad it + write final block
         // 2. write metadata
@@ -485,6 +496,7 @@ where
             let _written_amount = self.write(&pad)?;
             self.context.datasize -= leftover;
         }
+        // remember the offset to the metadata
         let offset = self.ciphertext_bytes + 8;
 
         assert!(self.this_block.is_empty());
@@ -494,6 +506,9 @@ where
         // we write that out at the very end of the file
         meta.write(&mut self.output)?;
 
+        // ...the last 8 bytes of the file are the offset to the
+        // metadata. this lets us *write* without demanding Seek but
+        // upon reading we do need Seek
         self.output.write_all(&offset.to_be_bytes())?;
         if let Some(completion_cb) = self.completed {
             completion_cb(&cap);
@@ -507,20 +522,20 @@ where
     W: Write,
 {
     fn write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error> {
-        // 1. do we have >= 1 "blocksize" plaintext?
-        // 2. yes? -> encrypt it
-        // 3. where do we put the ciphertext? need a writer
-        // boring way
+        // buffer the incoming data
         trace!("ImmutableBuilder::write: {} bytes", buf.len());
         self.this_block.write(buf)?;
         // if we have a non-full block of plaintext when done() is
         // called, it is padded with 0's and encrypted as the final
         // block.
+        // ...but for right now, we write out any full blocks we have
+        // after completing the above buffering.
         while self.this_block.len() >= self.context.blocksize {
             // cut off a block's worth at the front
             let this_block_bytes: Vec<u8> =
                 self.this_block.drain(0..self.context.blocksize).collect();
-            // encrypt it
+            // encrypt it (note we have to convert our internal
+            // encryption errors to std::io::Error to match Write)
             let encrypted_block = match self.context.encrypt_block(&this_block_bytes) {
                 Ok(it) => it,
                 Err(err) => return Err(std::io::Error::other(err)),
@@ -530,7 +545,7 @@ where
             self.ciphertext_bytes += encrypted_block.len();
         }
 
-        // things like std::io::copy are grumpy if we don't report
+        // things like std::io::copy become grumpy if we don't report
         // that we wrote everything .. semantically, this makes some
         // sense: we _have_ dealt with all the bytes in "buf" so
         // returning that number is valid.
@@ -538,16 +553,28 @@ where
 
         // todo: we're basically "just hosed" if anything errors in
         // here, right? should we mark ourselves as failed then?
+        // (e.g. if the above encrypy_block() call failed, we probably
+        // shouldn't accept any MORE output?)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        // 1. can we honour this by writing "part of a block"
-        // immediately (and then writing the rest when it comes in?)
+        // Q: what is the "right way" to honour flush() properly?
+        // - write a partial block? (not really possibly, we'd have to quantize at least on the underlying block-cipher size)
+        // - do nothing (we already wrote out all the full blocks we possibly can)
+
+        // A: it seems best to just "do nothing" since we basically
+        // only deal with or care about "blocks of ciphertext" at this
+        // point .. if we wrote out a partial block, how would we
+        // continue? If we padded it upon flush() that would be
+        // ... weird.
         debug!("flush called");
         //todo!()
         Ok(())
     }
     // think: can "done()" be like "close()"??
+    // (maybe-sort-of? we could mark ourselves as "you can't write any
+    // more" but the caller still has to call "done()" to retrieve the
+    // ReadCap
 }
 
 //TODO: below is the stuff we want to re-do as an iterator, right?
@@ -559,40 +586,12 @@ impl ReadCap for ImmutableReadCap {
     /// to the encoded data.
     fn encrypt(
         plaintext: Vec<u8>,
-        mut writer: std::io::BufWriter<File>,
+        writer: std::io::BufWriter<File>,
         blocksize: usize,
     ) -> Result<ImmutableReadCap, MagicCapError> {
-        writer.write_all(b"mcap")?; // tag
-        writer.write_all(&1u32.to_be_bytes())?; // version == 1
-
-        let plaintext_chunks = plaintext.as_slice().chunks(blocksize);
-
-        // todo: this should be created inside ReadCapability trait
-        // can use "default" trait implementation of a method to "use" the
-        // streaming version to do "in place" / whole-file
-        // decryption/encryption
-        let mut ptc = EncryptionContext::new(blocksize)?;
-        for plain in plaintext_chunks {
-            let ciphertext = ptc.encrypt_block(plain)?;
-            writer.write_all(ciphertext.as_slice())?;
-        }
-
-        // "done()" consumes the EncryptionContext, which is the
-        // correct semantics here because we can't usefully do
-        // anything else with a EncryptionContext once we've produced
-        // the ReadCap + ImmutableMetadata
-        let (cap, meta) = ptc.done()?;
-
-        let offset: u64 = writer.stream_position()?;
-
-        // write the metadata. It's at the end, but we already
-        // included an offset so readers can deserialize the metadata
-        // first.
-        meta.write(&mut writer)?;
-
-        // offset goes at the end
-        writer.write_all(&offset.to_be_bytes())?;
-
+        let mut builder = ImmutableBuilder::new(blocksize, writer, None)?;
+        builder.write(&plaintext)?;
+        let (cap, _) = builder.done()?;
         Ok(cap)
     }
 
