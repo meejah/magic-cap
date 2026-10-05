@@ -153,7 +153,7 @@ where
 {
     plain_output: &'a mut W,
     metadata: ImmutableMetadata,
-    key: TahoeAesCtr,  // contains key state, thus consumed
+    key: TahoeAesCtr, // contains key state, thus consumed
     this_block: Vec<u8>,
     this_block_num: usize,
     //plaintext_bytes: usize,
@@ -447,7 +447,6 @@ where
     ciphertext_bytes: usize,
     completed: Option<BuilderDoneCb>,
 }
-
 
 impl<W> ImmutableBuilder<W>
 where

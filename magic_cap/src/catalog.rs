@@ -14,7 +14,6 @@ use url::Url;
 
 use tracing::debug;
 
-
 // todo: might want a more fine-grained API so we do "get_metadata"
 // vs. "get_ciphertext" so that a network / storage-server can be
 // smarter about the seeks? (speculative)!
