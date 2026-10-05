@@ -589,7 +589,7 @@ impl ReadCap for ImmutableReadCap {
         blocksize: usize,
     ) -> Result<ImmutableReadCap, MagicCapError> {
         let mut builder = ImmutableBuilder::new(blocksize, writer, None)?;
-        builder.write(&plaintext)?;
+        builder.write_all(&plaintext)?;
         let (cap, _) = builder.done()?;
         Ok(cap)
     }
