@@ -2,3 +2,8 @@
 title = "Magic Cap"
 authors = ["meejah", "shapr"]
 language = "en"
+
+[preprocessor.termlink]
+glossary-path = "glossary.md"
+link-first-only = false
+case-sensitive = true
