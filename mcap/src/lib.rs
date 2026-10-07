@@ -466,7 +466,7 @@ pub fn main_debug_info(
     println!("      bytes: {}", meta.size);
     println!("     blocks: {}", meta.blocks);
     println!("encrypted metadata:");
-    let secret_meta = meta.secret_metadata(&readcap);
+    let secret_meta = meta.secret_metadata(readcap);
     for (k, v) in secret_meta.data {
         println!("  {k:>20}: {v}");
     }
@@ -644,13 +644,12 @@ impl Locator for FileUrl {
         let res = match res {
             Ok(x) => Ok(x),
             Err(e) => {
-                if let Some(src) = &e.source() {
-                    if let Some(ee) = src.downcast_ref::<std::io::Error>() {
-                        if ee.kind() == std::io::ErrorKind::BrokenPipe {
-                            debug!("ignoring BrokenPipe error");
-                            return Ok(());
-                        }
-                    }
+                if let Some(src) = &e.source()
+                    && let Some(ee) = src.downcast_ref::<std::io::Error>()
+                    && ee.kind() == std::io::ErrorKind::BrokenPipe
+                {
+                    debug!("ignoring BrokenPipe error");
+                    return Ok(());
                 }
                 Err(e)
             }
