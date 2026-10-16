@@ -1,7 +1,7 @@
 use magic_cap::ImmutableReadCap;
 use magic_cap_cli::{
     main_anthology_create, main_anthology_list, main_debug_info, main_debug_locator, main_decrypt,
-    main_encrypt, main_publish, main_reduce, main_verify, main_github_push,
+    main_encrypt, main_github_push, main_publish, main_reduce, main_verify,
 };
 use tracing_subscriber::FmtSubscriber;
 
@@ -83,7 +83,7 @@ enum GitHubCommands {
     Push {
         catalog: PathBuf,
         readcap: ImmutableReadCap,
-    }
+    },
 }
 
 #[derive(Subcommand)]
@@ -156,11 +156,11 @@ enum Commands {
         command: Option<AnthologyCommands>,
     },
 
-    #[command(about = "Write encrypted data to GitHub")]
+    #[command(about = "Write encrypted data to GitHub", name = "github")]
     GitHub {
         #[command(subcommand)]
         command: Option<GitHubCommands>,
-    }
+    },
 }
 
 /// When decrypting ciphertext, where is that ciphertext?
@@ -266,9 +266,9 @@ fn main() {
             None => Ok(()),
         },
         Some(Commands::GitHub { command }) => match command {
-            Some(GitHubCommands::Push { catalog, readcap}) => main_github_push(catalog, readcap),
+            Some(GitHubCommands::Push { catalog, readcap }) => main_github_push(catalog, readcap),
             None => Ok(()),
-        }
+        },
         None => Ok(()),
     };
     if let Err(e) = result {

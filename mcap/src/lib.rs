@@ -96,9 +96,9 @@
 //! ```
 //!
 
-use tracing::debug;
-use std::env;
 use base64::prelude::*;
+use std::env;
+use tracing::debug;
 
 use magic_cap::err::MagicCapError;
 /// Functions that implement the core CLI commands
@@ -113,15 +113,17 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
-use url::Url;
 use tokio;
+use url::Url;
 
 use walkdir::WalkDir;
 
 pub mod tests;
 
-
-pub async fn _github_push(catalog: &PathBuf, readcap: &ImmutableReadCap) -> Result<(), MagicCapError> {
+pub async fn _github_push(
+    catalog: &PathBuf,
+    readcap: &ImmutableReadCap,
+) -> Result<(), MagicCapError> {
     println!("_github_push");
     let client = reqwest::Client::new();
     let catalog_path = catalog.clone();
@@ -136,7 +138,7 @@ pub async fn _github_push(catalog: &PathBuf, readcap: &ImmutableReadCap) -> Resu
     // 5. commit the tree
     // 6. update "main" to point at tree
 
-    let token = env::var("GITHUB_AUTH").unwrap();
+    let token = env::var("GITHUB_AUTH").expect("env-var GITHUB_AUTH token");
 
     let locator: ImmutableIdentifier = readcap.try_into().unwrap();
     println!("locator: {}", locator);
@@ -151,25 +153,31 @@ pub async fn _github_push(catalog: &PathBuf, readcap: &ImmutableReadCap) -> Resu
 
     // create blob for our mcap data
     let body = "{\"encoding\": \"base64\", \"content\": \"".to_owned() + &b64 + "\"}";
-    let request = client.request(reqwest::Method::POST, "https://api.github.com/repos/meejah/magic-cap-storage/git/blobs")
+    let request = client
+        .request(
+            reqwest::Method::POST,
+            "https://api.github.com/repos/meejah/magic-cap-storage/git/blobs",
+        )
         .bearer_auth(&token)
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "reqwest")
         .header("X-GitHub-Api-Version", "2026-03-10")
-        .body(body)
-        ;
+        .body(body);
     let result = client.execute(request.build()?).await?;
     let text = result.text().await?;
     let js: serde_json::Value = serde_json::from_str(&text).unwrap();
     if let Some(blob_sha) = js["sha"].as_str() {
         println!("new blob sha {blob_sha}");
 
-        let request = client.request(reqwest::Method::GET, "https://api.github.com/repos/meejah/magic-cap-storage/git/ref/heads/main")
+        let request = client
+            .request(
+                reqwest::Method::GET,
+                "https://api.github.com/repos/meejah/magic-cap-storage/git/ref/heads/main",
+            )
             .bearer_auth(&token)
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "reqwest")
-            .header("X-GitHub-Api-Version", "2026-03-10")
-            ;
+            .header("X-GitHub-Api-Version", "2026-03-10");
 
         let result = client.execute(request.build()?).await?;
 
@@ -180,15 +188,22 @@ pub async fn _github_push(catalog: &PathBuf, readcap: &ImmutableReadCap) -> Resu
             println!("main tree {:?}", main_sha);
 
             let locator_str: String = locator.to_string();
-            let body = "{\"base_tree\": \"".to_owned() + &main_sha + "\", \"tree\": [{\"path\": \"" + &locator_str + "\", \"mode\": \"100644\", \"type\": \"blob\", \"sha\": \"" + &blob_sha + "\"}]}";
-            let tree_uri = format!("https://api.github.com/repos/meejah/magic-cap-storage/git/trees");
-            let request = client.request(reqwest::Method::POST, tree_uri)
+            let body = "{\"base_tree\": \"".to_owned()
+                + &main_sha
+                + "\", \"tree\": [{\"path\": \""
+                + &locator_str
+                + "\", \"mode\": \"100644\", \"type\": \"blob\", \"sha\": \""
+                + &blob_sha
+                + "\"}]}";
+            let tree_uri =
+                format!("https://api.github.com/repos/meejah/magic-cap-storage/git/trees");
+            let request = client
+                .request(reqwest::Method::POST, tree_uri)
                 .bearer_auth(&token)
                 .header("Accept", "application/vnd.github+json")
                 .header("User-Agent", "reqwest")
                 .header("X-GitHub-Api-Version", "2026-03-10")
-                .body(body)
-                ;
+                .body(body);
 
             let result = client.execute(request.build()?).await?;
 
@@ -199,14 +214,15 @@ pub async fn _github_push(catalog: &PathBuf, readcap: &ImmutableReadCap) -> Resu
                 println!("edited tree to {tree_sha:?}");
 
                 let body = "{\"message\": \"magic-cap automated update\", \"author\": {\"name\": \"meejah\", \"email\": \"meejah@meejah.ca\", \"date\": \"2026-01-01T00:00:00+00:00\"}, \"parents\": [\"".to_owned() + main_sha + "\"], \"tree\": \"" + tree_sha + "\"}";
-                let tree_uri = format!("https://api.github.com/repos/meejah/magic-cap-storage/git/commits");
-                let request = client.request(reqwest::Method::POST, tree_uri)
+                let tree_uri =
+                    format!("https://api.github.com/repos/meejah/magic-cap-storage/git/commits");
+                let request = client
+                    .request(reqwest::Method::POST, tree_uri)
                     .bearer_auth(&token)
                     .header("Accept", "application/vnd.github+json")
                     .header("User-Agent", "reqwest")
                     .header("X-GitHub-Api-Version", "2026-03-10")
-                    .body(body)
-                    ;
+                    .body(body);
 
                 let result = client.execute(request.build()?).await?;
 
@@ -218,14 +234,16 @@ pub async fn _github_push(catalog: &PathBuf, readcap: &ImmutableReadCap) -> Resu
                     println!("made commit: {commit_sha}");
 
                     let body = "{\"sha\": \"".to_owned() + &commit_sha + "\", \"force\": true}";
-                    let tree_uri = format!("https://api.github.com/repos/meejah/magic-cap-storage/git/refs/heads/main");
-                    let request = client.request(reqwest::Method::POST, tree_uri)
+                    let tree_uri = format!(
+                        "https://api.github.com/repos/meejah/magic-cap-storage/git/refs/heads/main"
+                    );
+                    let request = client
+                        .request(reqwest::Method::POST, tree_uri)
                         .bearer_auth(&token)
                         .header("Accept", "application/vnd.github+json")
                         .header("User-Agent", "reqwest")
                         .header("X-GitHub-Api-Version", "2026-03-10")
-                        .body(body)
-                        ;
+                        .body(body);
 
                     let result = client.execute(request.build()?).await?;
 
@@ -241,17 +259,17 @@ pub async fn _github_push(catalog: &PathBuf, readcap: &ImmutableReadCap) -> Resu
     Ok(())
 }
 
-pub fn main_github_push(catalog: &PathBuf, readcap: &ImmutableReadCap) -> Result<(), MagicCapError> {
-
+pub fn main_github_push(
+    catalog: &PathBuf,
+    readcap: &ImmutableReadCap,
+) -> Result<(), MagicCapError> {
     // note: integrate with "top-level is async" stuff, but for now we just run Tokio in here
 
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap()
-        .block_on(
-            _github_push(catalog, readcap)
-        )
+        .block_on(_github_push(catalog, readcap))
 }
 
 /// Implementation of "mcap encrypt"
